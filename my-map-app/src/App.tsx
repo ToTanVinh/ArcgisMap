@@ -4,7 +4,7 @@ import {
   ArcgisLegend,
   ArcgisExpand,
 } from "@arcgis/map-components-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import GraphicsLayer from "@arcgis/core/layers/GraphicsLayer";
 import Point from "@arcgis/core/geometry/Point";
 import Graphic from "@arcgis/core/Graphic";
@@ -23,6 +23,7 @@ import { FeatureCountCard } from "./components/FeatureCountCart";
 import { ArcSlider } from "./components/ArcSlider";
 import PopupTemplate from "@arcgis/core/PopupTemplate.js";
 import SimpleFillSymbol from "@arcgis/core/symbols/SimpleFillSymbol";
+import LayerList from "./components/LayerList";
 
 const simpleMarkerSymbol = new SimpleMarkerSymbol({ color: "green" });
 
@@ -70,6 +71,7 @@ const url = "http://localhost:3001/earthquake";
 const statesUrl = "http://localhost:3002/states";
 
 const topEarthQuakeGeoJSONLayer = new GeoJSONLayer({
+  id: "topEarthquakeLayer",
   url,
   popupTemplate: template,
   renderer: simpleRender,
@@ -82,6 +84,7 @@ const topEarthQuakeGeoJSONLayer = new GeoJSONLayer({
 });
 
 const bottomEarthQuakeGeoJSONLayer = new GeoJSONLayer({
+  id: "bottomEarthquakeLayer",
   url,
   popupTemplate: template,
   renderer: simpleRender,
@@ -120,6 +123,7 @@ const statesRenderer = new SimpleRenderer({
   }),
 });
 const statesGeoJSONLayer = new GeoJSONLayer({
+  id: "statesGeoJSONLayer",
   url: statesUrl,
   popupTemplate: statesPopupTemplate,
   renderer: statesRenderer,
@@ -128,6 +132,28 @@ function App() {
   const [mapView, setMapView] = useState<__esri.MapView>();
   const [showEarthquakeLayer, setShowEarthquakeLayer] = useState(true);
   const [showStatesLayer, setShowStatesLayer] = useState(true);
+  const graphicsLayer = new GraphicsLayer();
+  mapView?.map.add(graphicsLayer);
+  const [searchResults, setSearchResults] = useState<__esri.Graphic[]>([]);
+  const [searchQuery, setSearchQuery] = useState("");
+
+  const handleToggleFullscreen = () => {
+    const mapDiv = document.querySelector(".mapDiv") as HTMLElement; // Chỉ định kiểu cho mapDiv
+    if (mapDiv) {
+      // Kiểm tra xem mapDiv có khác null hay không
+      if (!document.fullscreenElement) {
+        mapDiv.requestFullscreen().catch((err) => {
+          console.error(
+            `Error attempting to enable full-screen mode: ${err.message}`
+          );
+        });
+      } else {
+        document.exitFullscreen();
+      }
+    } else {
+      console.error("mapDiv is null"); // Xử lý trường hợp mapDiv không tồn tại
+    }
+  };
 
   const handleEarthquakeCheckboxChange = () => {
     setShowEarthquakeLayer((prev) => {
@@ -154,15 +180,128 @@ function App() {
       return !prev;
     });
   };
+
+  useEffect(() => {
+    if (mapView) {
+      const handleMapClick = async (event: __esri.ViewClickEvent) => {
+        const response = await mapView.hitTest(event);
+        console.log("Clicked at:", event); // Log thông tin nhấp chuột
+
+        if (response.results.length) {
+          // Xử lý kết quả hitTest ở đây
+          const graphicHit = response.results.find((result) => {
+            return (
+              (result as __esri.GraphicHit).graphic &&
+              ((result as __esri.GraphicHit).graphic.layer.id ===
+                "earthquakeGeoJSONLayer" ||
+                (result as __esri.GraphicHit).graphic.layer.id ===
+                  "statesGeoJSONLayer")
+            );
+          }) as __esri.GraphicHit;
+
+          if (graphicHit) {
+            const clickedGraphic = graphicHit.graphic;
+
+            // Hiển thị tùy chọn cho người dùng
+            const choice = window.confirm("Do you want to edit this feature?");
+
+            if (choice) {
+              // Chỉnh sửa thuộc tính của đối tượng
+              const newAttributes = prompt(
+                "Nhập các thuộc tính mới cho đối tượng:",
+                JSON.stringify(clickedGraphic.attributes)
+              );
+              if (newAttributes) {
+                clickedGraphic.attributes = JSON.parse(newAttributes);
+
+                // Cập nhật đối tượng đồ họa trong lớp đồ họa
+                const updatedGraphic = clickedGraphic.clone();
+                updatedGraphic.attributes = JSON.parse(newAttributes);
+                graphicsLayer.add(updatedGraphic); // Thêm đối tượng đã cập nhật vào lớp đồ họa
+              }
+            }
+          }
+        } else {
+          // Thông báo khi không click vào layer nào
+          alert("Bạn không click vào đối tượng nào!");
+        }
+      };
+
+      mapView.on("click", handleMapClick); // Thiết lập listener cho sự kiện nhấp chuột
+
+      return () => {};
+    }
+  }, [mapView]);
+
+  const handleSearch = async () => {
+    if (!searchQuery) return;
+
+    // Sử dụng ArcGIS Geocoding API để tìm kiếm
+    const response = await fetch(
+      `https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates?f=json&address=${encodeURIComponent(
+        searchQuery
+      )}&outFields=Match_addr&maxLocations=5`
+    );
+
+    const data = await response.json();
+    if (data.candidates && data.candidates.length) {
+      const results = data.candidates.map((candidate: any) => {
+        const point = {
+          type: "point",
+          longitude: candidate.location.x,
+          latitude: candidate.location.y,
+          spatialReference: { wkid: 4326 },
+        };
+
+        return new Graphic({
+          geometry: point,
+          attributes: {
+            address: candidate.address,
+          },
+          // Use SimpleMarkerSymbol instead of a plain object
+          symbol: new SimpleMarkerSymbol({
+            color: "blue",
+            size: "12px",
+            outline: {
+              color: "white",
+              width: 1,
+            },
+          }),
+        });
+      });
+
+      setSearchResults(results); // Cập nhật kết quả tìm kiếm
+      if (mapView) {
+        mapView.goTo(results[0].geometry); // Di chuyển bản đồ đến vị trí đầu tiên
+      }
+    } else {
+      setSearchResults([]); // Không có kết quả tìm kiếm
+    }
+  };
+
   return (
     <>
       <div className="mapDiv">
+        <input
+          type="text"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          placeholder="Tìm kiếm địa điểm..."
+        />
+        <button onClick={handleSearch}>Tìm kiếm</button>
+
         <ArcgisMap
           onArcgisViewReadyChange={(event) => {
             //count
             const { map, view }: { map: __esri.Map; view: __esri.MapView } =
               event.target;
-            setMapView(view);
+            if (view) {
+              setMapView(view);
+              console.log("view created");
+            } else {
+              console.error("View is undefined");
+            }
+
             // Thêm layer vào bản đồ nếu checkbox được chọn
             if (showEarthquakeLayer) {
               map.add(geoJSONLayer);
@@ -173,28 +312,48 @@ function App() {
           }}
         >
           <ArcgisExpand>
-            <ArcgisLegend></ArcgisLegend>
+            {/* <LayerList map={mapView ? mapView.map : null} />{" "} */}
+            {/* Add Layer List */}
+            <ArcgisLegend
+              layerInfos={[
+                {
+                  layer: geoJSONLayer,
+                  title: "Earthquake Data",
+                },
+                {
+                  layer: statesGeoJSONLayer,
+                  title: "States Data",
+                },
+              ]}
+            />
           </ArcgisExpand>
         </ArcgisMap>
+
+        <div className="checkbox-container">
+          <button onClick={handleToggleFullscreen}>
+            {document.fullscreenElement
+              ? "Exit Fullscreen"
+              : "Enter Fullscreen"}
+          </button>
+          <label className="checkbox-label">
+            <input
+              type="checkbox"
+              checked={showEarthquakeLayer}
+              onChange={handleEarthquakeCheckboxChange}
+            />
+            Show Earthquake Layer
+          </label>
+          <label className="checkbox-label">
+            <input
+              type="checkbox"
+              checked={showStatesLayer}
+              onChange={handleStatesCheckboxChange}
+            />
+            Show States Layer
+          </label>
+        </div>
       </div>
-      <div>
-        <label>
-          <input
-            type="checkbox"
-            checked={showEarthquakeLayer}
-            onChange={handleEarthquakeCheckboxChange}
-          />
-          Show Earthquake Layer
-        </label>
-        <label>
-          <input
-            type="checkbox"
-            checked={showStatesLayer}
-            onChange={handleStatesCheckboxChange}
-          />
-          Show States Layer
-        </label>
-      </div>
+
       {mapView && (
         <FeatureCountCard title="Earthquake" view={mapView}></FeatureCountCard>
       )}

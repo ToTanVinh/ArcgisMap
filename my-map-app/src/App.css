@@ -45,3 +45,12 @@
 .checkboxLabel {
   margin-right: 15px; /* Space between labels */
 }
+
+.checkbox-container {
+  position: absolute; /* Hoặc fixed nếu bạn muốn nó ở một vị trí cụ thể */
+  bottom: 10px; /* Điều chỉnh theo ý bạn */
+  left: 10px; /* Điều chỉnh theo ý bạn */
+  background: white; /* Nền trắng để dễ đọc */
+  padding: 10px; /* Padding cho khoảng cách */
+  z-index: 10;
+}
